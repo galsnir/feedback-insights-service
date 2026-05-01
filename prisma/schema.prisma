@@ -1,0 +1,57 @@
+// Prisma schema for the Feedback Insights Service.
+// SQLite is used for simplicity; the relational shape would not change for Postgres.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Status of an individual feedback submission's analysis lifecycle.
+// SQLite has no native enum, so we store the value as TEXT and validate in app code.
+//   RECEIVED   -> persisted, awaiting worker
+//   ANALYZING  -> claimed by worker, LLM call in flight
+//   DONE       -> analysis row attached
+//   FAILED     -> permanent failure; manually retriable
+
+model Feedback {
+  id          String    @id @default(cuid())
+  content     String
+  contentHash String
+  status      String    @default("RECEIVED")
+  attempts    Int       @default(0)
+  lastError   String?
+  analysisId  String?
+  analysis    Analysis? @relation(fields: [analysisId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([contentHash])
+  @@index([status])
+}
+
+// One row per unique input (keyed by contentHash). Multiple Feedback rows can
+// share an Analysis -- this is what implements the dedupe guardrail.
+model Analysis {
+  id                String            @id @default(cuid())
+  contentHash       String            @unique
+  rawResponse       String
+  sentiment         String
+  actionableInsight String
+  featureRequests   FeatureRequest[]
+  feedbacks         Feedback[]
+  createdAt         DateTime          @default(now())
+}
+
+model FeatureRequest {
+  id         String   @id @default(cuid())
+  analysisId String
+  analysis   Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  title      String
+  confidence Float
+
+  @@index([analysisId])
+}
