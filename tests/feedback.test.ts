@@ -86,11 +86,19 @@ describe("Feedback API", () => {
     expect(getRes.body.status).toBe("DONE");
     expect(getRes.body.analysis).toBeTruthy();
     expect(getRes.body.analysis.sentiment).toBe("positive");
-    expect(getRes.body.analysis.featureRequests.length).toBeGreaterThan(0);
-    expect(getRes.body.analysis.featureRequests[0].title.toLowerCase()).toContain(
+    expect(getRes.body.analysis.feature_requests.length).toBeGreaterThan(0);
+    expect(getRes.body.analysis.feature_requests[0].title.toLowerCase()).toContain(
       "dark mode",
     );
-    expect(typeof getRes.body.analysis.actionableInsight).toBe("string");
+    expect(typeof getRes.body.analysis.actionable_insight).toBe("string");
+    // Spec field names + raw response on both views
+    expect(typeof getRes.body.created_at).toBe("string");
+    expect(typeof getRes.body.updated_at).toBe("string");
+    expect(typeof getRes.body.raw_response).toBe("string");
+    expect(typeof getRes.body.analysis.raw_response).toBe("string");
+    // The raw response should be valid JSON parseable to the same shape.
+    const parsedRaw = JSON.parse(getRes.body.raw_response);
+    expect(parsedRaw.sentiment).toBe("positive");
   });
 
   it("dedupe: identical content shares a single Analysis row", async () => {
@@ -136,10 +144,12 @@ describe("Feedback API", () => {
 
     const failedRes = await request(app).get(`/feedback/${id}`).expect(200);
     expect(failedRes.body.status).toBe("FAILED");
-    expect(failedRes.body.lastError).toMatch(/invalid_json/);
+    expect(failedRes.body.last_error).toMatch(/invalid_json/);
+    // Raw response must be persisted EVEN on failure (spec requirement) and
+    // it must be the actual full bad output, not truncated into last_error.
+    expect(failedRes.body.raw_response).toBe("not json {{{");
     expect(failedRes.body.attempts).toBe(1);
 
-    // Retry from a non-FAILED state should be rejected with 409.
     const okRes = await request(app)
       .post(`/feedback/${id}/retry`)
       .send()
@@ -152,9 +162,36 @@ describe("Feedback API", () => {
     expect(finalRes.body.status).toBe("DONE");
     expect(finalRes.body.analysis.sentiment).toBe("neutral");
     expect(finalRes.body.attempts).toBe(2);
+    expect(finalRes.body.last_error).toBeNull();
+    // After a successful retry the raw on the Feedback row must be the NEW
+    // raw, not the stale one from the prior failed attempt.
+    expect(finalRes.body.raw_response).toContain('"sentiment":"neutral"');
 
-    // Second retry should now be rejected because state is DONE.
+    // A second retry should now be rejected because state is DONE.
     await request(app).post(`/feedback/${id}/retry`).send().expect(409);
+  });
+
+  it("schema-invalid output -> FAILED with raw response persisted", async () => {
+    const badRaw = JSON.stringify({
+      sentiment: "ecstatic", // not in enum
+      feature_requests: [{ title: "x", confidence: "high" }], // confidence wrong type
+      actionable_insight: "n/a",
+    });
+    const provider = new ScriptedProvider([() => ({ raw: badRaw })]);
+    const { app, queue } = buildHarness(provider);
+
+    const submit = await request(app)
+      .post("/feedback")
+      .send({ content: "schema invalid path" })
+      .expect(201);
+    await queue.idle();
+
+    const res = await request(app).get(`/feedback/${submit.body.id}`).expect(200);
+    expect(res.body.status).toBe("FAILED");
+    expect(res.body.last_error).toMatch(/schema_invalid/);
+    expect(res.body.last_error).toMatch(/sentiment/);
+    expect(res.body.raw_response).toBe(badRaw);
+    expect(res.body.analysis).toBeNull();
   });
 
   it("sweeper rescues feedback stuck in ANALYZING and reruns it", async () => {

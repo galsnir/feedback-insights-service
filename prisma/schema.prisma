@@ -23,6 +23,12 @@ model Feedback {
   contentHash String
   status      String    @default("RECEIVED")
   attempts    Int       @default(0)
+  // Raw response from the most recent LLM call for THIS feedback row, if any.
+  // Populated regardless of whether validation succeeded (so failures can be
+  // audited end-to-end). Stays null for rows that hit the dedupe cache and
+  // therefore never called the LLM directly -- those can read raw via the
+  // attached Analysis.rawResponse.
+  rawResponse String?
   lastError   String?
   analysisId  String?
   analysis    Analysis? @relation(fields: [analysisId], references: [id])

@@ -44,6 +44,8 @@ OPENAI_MODEL=gpt-4o-mini
 | POST   | `/feedback/:id/retry`   | Re-enqueue a FAILED feedback. 409 if not currently FAILED.                    |
 | GET    | `/health`               | Liveness + queue depth.                                                       |
 
+JSON field names use snake_case (matching the spec and the LLM output schema).
+
 Example:
 
 ```bash
@@ -52,7 +54,29 @@ curl -X POST localhost:3000/feedback -H 'content-type: application/json' \
 # -> {"id":"cmom...","status":"RECEIVED"}
 
 curl localhost:3000/feedback/cmom...
-# -> { ..., "status":"DONE", "analysis": { "sentiment":"negative", "featureRequests":[...], ... } }
+```
+
+Returns:
+
+```json
+{
+  "id": "cmom...",
+  "content": "The app should support dark mode and is a bit slow.",
+  "status": "DONE",
+  "attempts": 1,
+  "last_error": null,
+  "raw_response": "{\"sentiment\":\"negative\", ...}",
+  "created_at": "2026-05-01T12:00:00.000Z",
+  "updated_at": "2026-05-01T12:00:01.000Z",
+  "analysis": {
+    "id": "cmom...",
+    "sentiment": "negative",
+    "actionable_insight": "...",
+    "feature_requests": [{ "title": "dark mode", "confidence": 0.6 }],
+    "raw_response": "{\"sentiment\":\"negative\", ...}",
+    "created_at": "2026-05-01T12:00:01.000Z"
+  }
+}
 ```
 
 ---
@@ -114,9 +138,9 @@ Normalization is intentionally minimal: `content.trim()` only. Casing and intern
 
 The validation pipeline treats every output as untrusted:
 
-1. `JSON.parse` — fail → `FAILED` with `lastError = "invalid_json: ..."`.
-2. `AnalysisSchema.safeParse` — fail → `FAILED` with `lastError = "schema_invalid: <field>: <issue>"`. The schema enforces `sentiment ∈ {positive, neutral, negative}`, `confidence ∈ [0, 1]`, non-empty `actionable_insight`, etc.
-3. Raw response is **always persisted** on the `Feedback.lastError` (truncated to 2KB) when validation fails, so you can audit what the model actually said. On success, the raw response is stored on the `Analysis.rawResponse` column.
+1. `JSON.parse` — fail → `FAILED` with `last_error = "invalid_json: ..."`.
+2. `AnalysisSchema.safeParse` — fail → `FAILED` with `last_error = "schema_invalid: <field>: <issue>"`. The schema enforces `sentiment ∈ {positive, neutral, negative}`, `confidence ∈ [0, 1]`, non-empty `actionable_insight`, etc.
+3. **Raw response is always persisted on `Feedback.raw_response` immediately after the LLM call returns**, before any parsing. Failures keep the full raw output (no truncation) so you can audit exactly what the model said. On success, the same raw is also copied to `Analysis.raw_response`. Dedupe-cache hits and transport-level failures legitimately have no raw to persist; for those `raw_response` is `null`.
 
 Transport errors (HTTP 5xx, abort, timeout) get **one in-worker retry** with a 50ms delay. Validation errors are **not** retried — re-asking the same model the same question typically produces the same broken output, and it would just burn tokens.
 

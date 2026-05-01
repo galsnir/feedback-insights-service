@@ -96,25 +96,30 @@ function clampLimit(raw: number | undefined): number {
   return Math.min(Math.max(1, Math.floor(raw)), MAX_LIMIT);
 }
 
+// Boundary translation: snake_case for the JSON wire format (matches the
+// challenge spec's field naming and the LLM output schema's existing
+// snake_case style), camelCase internally per JS convention.
 function serializeFeedback(f: FeedbackWithAnalysis) {
   return {
     id: f.id,
     content: f.content,
     status: f.status,
     attempts: f.attempts,
-    lastError: f.lastError,
-    createdAt: f.createdAt.toISOString(),
-    updatedAt: f.updatedAt.toISOString(),
+    last_error: f.lastError,
+    raw_response: f.rawResponse,
+    created_at: f.createdAt.toISOString(),
+    updated_at: f.updatedAt.toISOString(),
     analysis: f.analysis
       ? {
           id: f.analysis.id,
           sentiment: f.analysis.sentiment,
-          actionableInsight: f.analysis.actionableInsight,
-          featureRequests: f.analysis.featureRequests.map((fr) => ({
+          actionable_insight: f.analysis.actionableInsight,
+          feature_requests: f.analysis.featureRequests.map((fr) => ({
             title: fr.title,
             confidence: fr.confidence,
           })),
-          createdAt: f.analysis.createdAt.toISOString(),
+          raw_response: f.analysis.rawResponse,
+          created_at: f.analysis.createdAt.toISOString(),
         }
       : null,
   };

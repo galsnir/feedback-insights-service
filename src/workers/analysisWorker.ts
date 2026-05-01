@@ -31,6 +31,10 @@ export function createAnalysisHandler(opts: AnalysisWorkerOptions) {
         status: FeedbackStatus.ANALYZING,
         attempts: { increment: 1 },
         lastError: null,
+        // Clear any raw response left over from a prior failed attempt, so
+        // the new attempt's raw fully replaces it (or stays null if dedupe
+        // skips the LLM call this time).
+        rawResponse: null,
       },
     });
 
@@ -63,20 +67,23 @@ export function createAnalysisHandler(opts: AnalysisWorkerOptions) {
         retries: transportRetries,
       });
     } catch (err) {
+      // Transport failures have no raw body to persist.
       await markFailed(prisma, feedback.id, `transport: ${(err as Error).message}`);
       return;
     }
+
+    // Persist raw IMMEDIATELY, before any parsing. This guarantees that every
+    // LLM call's output is auditable, regardless of what happens next.
+    await prisma.feedback.update({
+      where: { id: feedback.id },
+      data: { rawResponse: raw },
+    });
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
-      await markFailed(
-        prisma,
-        feedback.id,
-        `invalid_json: ${(err as Error).message}`,
-        raw,
-      );
+      await markFailed(prisma, feedback.id, `invalid_json: ${(err as Error).message}`);
       return;
     }
 
@@ -88,7 +95,6 @@ export function createAnalysisHandler(opts: AnalysisWorkerOptions) {
         `schema_invalid: ${validation.error.issues
           .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
           .join("; ")}`,
-        raw,
       );
       return;
     }
@@ -187,20 +193,17 @@ async function markFailed(
   prisma: PrismaClient,
   feedbackId: string,
   reason: string,
-  rawResponse?: string,
 ): Promise<void> {
-  // We persist the raw response on the Feedback row's lastError when we have
-  // no Analysis row yet. The structured Analysis is intentionally NOT created
-  // for failed validations -- the spec says "persist raw + validated result";
-  // a failed validation has no validated result to persist.
-  const truncated = rawResponse
-    ? `${reason} | raw=${rawResponse.slice(0, 2000)}`
-    : reason;
+  // The raw response (when there is one) is already on Feedback.rawResponse
+  // by this point. lastError is purely the human-readable reason. The
+  // structured Analysis is intentionally NOT created for failed validations --
+  // the spec says "persist raw + validated result"; a failed validation has
+  // no validated result to persist.
   await prisma.feedback.updateMany({
     where: { id: feedbackId, status: FeedbackStatus.ANALYZING },
     data: {
       status: FeedbackStatus.FAILED,
-      lastError: truncated,
+      lastError: reason,
     },
   });
 }
