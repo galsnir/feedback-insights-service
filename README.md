@@ -1,5 +1,7 @@
 # Feedback Insights Service
 
+[![CI](https://github.com/galsnir/feedback-insights-service/actions/workflows/ci.yml/badge.svg)](https://github.com/galsnir/feedback-insights-service/actions/workflows/ci.yml)
+
 A small Node.js + TypeScript backend that accepts free-text user feedback and asynchronously extracts structured insights (sentiment, feature requests, actionable insight) using an LLM. Built for the AI-Assisted Engineering Challenge (3-hour timebox).
 
 The service is deliberately small. Engineering judgment, defensive AI handling, and clear state management were prioritized over breadth.
